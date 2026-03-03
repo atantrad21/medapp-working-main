@@ -128,43 +128,57 @@ def unet_generator():
     
     return keras.Model(inputs=inputs, outputs=x)
 
-def load_weights_manually(model, h5_path):
-    """Load weights from H5 file by manually reading weight arrays"""
-    logger.info(f"Reading weight arrays from {h5_path}...")
+def explore_h5_structure(h5_path):
+    """Recursively explore H5 file structure"""
+    def print_structure(name, obj):
+        logger.info(f"  {name}: {type(obj)}")
+        if isinstance(obj, h5py.Dataset):
+            logger.info(f"    Shape: {obj.shape}, DType: {obj.dtype}")
     
+    logger.info(f"Exploring H5 structure of {h5_path}:")
     with h5py.File(h5_path, 'r') as f:
-        # Extract all weight arrays
-        weight_arrays = []
-        
-        # Try different H5 structures
-        if 'model_weights' in f.keys():
-            # Standard Keras format
-            logger.info("Found model_weights group")
-            for layer_name in f['model_weights'].keys():
-                layer_group = f['model_weights'][layer_name]
-                for weight_name in layer_group.keys():
-                    weight_arrays.append(np.array(layer_group[weight_name]))
-        else:
-            # Raw weight arrays (numbered)
-            logger.info("Searching for raw weight arrays...")
-            for key in sorted(f.keys()):
-                if isinstance(f[key], h5py.Dataset):
-                    weight_arrays.append(np.array(f[key]))
-        
-        logger.info(f"Found {len(weight_arrays)} weight arrays")
-        
-        # Assign weights to model
-        if len(weight_arrays) != len(model.weights):
-            logger.warning(f"Weight count mismatch: file has {len(weight_arrays)}, model expects {len(model.weights)}")
-        
-        # Assign weights by index
-        for i, (model_weight, file_weight) in enumerate(zip(model.weights, weight_arrays)):
-            if model_weight.shape == file_weight.shape:
-                model_weight.assign(file_weight)
-                logger.info(f"Loaded weight {i}: {model_weight.shape}")
-            else:
-                logger.error(f"Shape mismatch at index {i}: model {model_weight.shape} vs file {file_weight.shape}")
-                raise ValueError(f"Weight shape mismatch at index {i}")
+        logger.info(f"Root keys: {list(f.keys())}")
+        f.visititems(print_structure)
+
+def load_weights_from_h5(model, h5_path):
+    """Try different methods to load weights"""
+    logger.info(f"Attempting to load weights from {h5_path}")
+    
+    # Method 1: Standard Keras load_weights
+    try:
+        logger.info("Method 1: Standard load_weights...")
+        model.load_weights(h5_path)
+        logger.info("✅ Method 1 SUCCESS!")
+        return True
+    except Exception as e:
+        logger.warning(f"Method 1 failed: {e}")
+    
+    # Method 2: Load with by_name
+    try:
+        logger.info("Method 2: load_weights with by_name=True...")
+        model.load_weights(h5_path, by_name=True, skip_mismatch=True)
+        logger.info("✅ Method 2 SUCCESS!")
+        return True
+    except Exception as e:
+        logger.warning(f"Method 2 failed: {e}")
+    
+    # Method 3: Explore structure
+    explore_h5_structure(h5_path)
+    
+    # Method 4: Try loading as complete model
+    try:
+        logger.info("Method 4: Loading as complete Keras model...")
+        loaded_model = keras.models.load_model(h5_path, custom_objects={'InstanceNormalization': InstanceNormalization})
+        # Copy weights to our model
+        for i, (target_w, source_w) in enumerate(zip(model.weights, loaded_model.weights)):
+            target_w.assign(source_w)
+        logger.info("✅ Method 4 SUCCESS!")
+        return True
+    except Exception as e:
+        logger.warning(f"Method 4 failed: {e}")
+    
+    logger.error("All weight loading methods failed!")
+    return False
 
 def download_and_load_models():
     global models, models_loaded
@@ -189,11 +203,15 @@ def download_and_load_models():
             
             logger.info(f"Model has {len(model.weights)} weight tensors")
             
-            logger.info(f"Loading weights manually for Generator {name.upper()}...")
-            load_weights_manually(model, output_path)
+            success = load_weights_from_h5(model, output_path)
             
-            models[name] = model
-            logger.info(f"Generator {name.upper()} LOADED SUCCESSFULLY")
+            if success:
+                models[name] = model
+                logger.info(f"Generator {name.upper()} LOADED SUCCESSFULLY")
+            else:
+                logger.error(f"Failed to load Generator {name.upper()}")
+                models_loaded = False
+                return
         
         models_loaded = True
         logger.info("ALL 4 GENERATORS LOADED - READY FOR INFERENCE")
