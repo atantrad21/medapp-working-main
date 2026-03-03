@@ -116,9 +116,11 @@ def unet_generator():
         x = up(x)
         x = tf.keras.layers.Concatenate()([x, skip])
     
+    # Final layer WITH bias (matches Layer 32 in weights)
     last = tf.keras.layers.Conv2DTranspose(
         1, 4, strides=2, padding='same',
         kernel_initializer=tf.random_normal_initializer(0., 0.02),
+        use_bias=True,  # CHANGED: Now uses bias to match saved weights
         activation='tanh'
     )
     
@@ -148,11 +150,19 @@ def download_and_load_models():
             dummy_input = tf.zeros((1, 64, 64, 1))
             _ = model(dummy_input, training=False)
             
+            logger.info(f"Model has {len(model.weights)} weight tensors")
+            
             logger.info(f"Loading weights for Generator {name.upper()}...")
-            model.load_weights(output_path)
+            try:
+                model.load_weights(output_path)
+                logger.info(f"Generator {name.upper()} LOADED SUCCESSFULLY")
+            except Exception as load_err:
+                logger.error(f"Weight loading failed: {load_err}")
+                # Try loading by name
+                logger.info("Attempting load_weights with by_name=False, skip_mismatch=False...")
+                model.load_weights(output_path, by_name=False, skip_mismatch=False)
             
             models[name] = model
-            logger.info(f"Generator {name.upper()} LOADED SUCCESSFULLY")
         
         models_loaded = True
         logger.info("ALL 4 GENERATORS LOADED - READY FOR INFERENCE")
