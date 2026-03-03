@@ -131,7 +131,7 @@ def download_and_load_models():
     
     try:
         import gdown
-        logger.info("DOWNLOADING 652 CHECKPOINT MODELS")
+        logger.info("DOWNLOADING 652 CHECKPOINT MODELS FROM GOOGLE DRIVE")
         
         for name, file_id in FILE_IDS.items():
             logger.info(f"Downloading Generator {name.upper()}...")
@@ -140,20 +140,27 @@ def download_and_load_models():
             url = f'https://drive.google.com/uc?id={file_id}'
             gdown.download(url, output_path, quiet=False)
             
-            logger.info(f"Building Generator {name.upper()}...")
+            logger.info(f"Building Generator {name.upper()} architecture...")
             model = unet_generator()
+            
+            # Build the model by calling it with dummy input
+            logger.info(f"Initializing Generator {name.upper()} layers...")
+            dummy_input = tf.zeros((1, 64, 64, 1))
+            _ = model(dummy_input, training=False)
             
             logger.info(f"Loading weights for Generator {name.upper()}...")
             model.load_weights(output_path)
             
             models[name] = model
-            logger.info(f"Generator {name.upper()} loaded")
+            logger.info(f"Generator {name.upper()} LOADED SUCCESSFULLY")
         
         models_loaded = True
-        logger.info("ALL 4 GENERATORS LOADED - READY")
+        logger.info("ALL 4 GENERATORS LOADED - READY FOR INFERENCE")
         
     except Exception as e:
         logger.error(f"Error loading models: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         models_loaded = False
 
 def preprocess_image(image_bytes):
