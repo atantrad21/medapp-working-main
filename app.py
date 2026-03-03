@@ -25,6 +25,7 @@ models_loaded = False
 
 import tensorflow as tf
 from tensorflow import keras
+import h5py
 
 logger.info("TensorFlow imported")
 logger.info(f"TensorFlow version: {tf.__version__}")
@@ -116,17 +117,54 @@ def unet_generator():
         x = up(x)
         x = tf.keras.layers.Concatenate()([x, skip])
     
-    # Final layer WITH bias (matches Layer 32 in weights)
     last = tf.keras.layers.Conv2DTranspose(
         1, 4, strides=2, padding='same',
         kernel_initializer=tf.random_normal_initializer(0., 0.02),
-        use_bias=True,  # CHANGED: Now uses bias to match saved weights
+        use_bias=True,
         activation='tanh'
     )
     
     x = last(x)
     
     return keras.Model(inputs=inputs, outputs=x)
+
+def load_weights_manually(model, h5_path):
+    """Load weights from H5 file by manually reading weight arrays"""
+    logger.info(f"Reading weight arrays from {h5_path}...")
+    
+    with h5py.File(h5_path, 'r') as f:
+        # Extract all weight arrays
+        weight_arrays = []
+        
+        # Try different H5 structures
+        if 'model_weights' in f.keys():
+            # Standard Keras format
+            logger.info("Found model_weights group")
+            for layer_name in f['model_weights'].keys():
+                layer_group = f['model_weights'][layer_name]
+                for weight_name in layer_group.keys():
+                    weight_arrays.append(np.array(layer_group[weight_name]))
+        else:
+            # Raw weight arrays (numbered)
+            logger.info("Searching for raw weight arrays...")
+            for key in sorted(f.keys()):
+                if isinstance(f[key], h5py.Dataset):
+                    weight_arrays.append(np.array(f[key]))
+        
+        logger.info(f"Found {len(weight_arrays)} weight arrays")
+        
+        # Assign weights to model
+        if len(weight_arrays) != len(model.weights):
+            logger.warning(f"Weight count mismatch: file has {len(weight_arrays)}, model expects {len(model.weights)}")
+        
+        # Assign weights by index
+        for i, (model_weight, file_weight) in enumerate(zip(model.weights, weight_arrays)):
+            if model_weight.shape == file_weight.shape:
+                model_weight.assign(file_weight)
+                logger.info(f"Loaded weight {i}: {model_weight.shape}")
+            else:
+                logger.error(f"Shape mismatch at index {i}: model {model_weight.shape} vs file {file_weight.shape}")
+                raise ValueError(f"Weight shape mismatch at index {i}")
 
 def download_and_load_models():
     global models, models_loaded
@@ -145,24 +183,17 @@ def download_and_load_models():
             logger.info(f"Building Generator {name.upper()} architecture...")
             model = unet_generator()
             
-            # Build the model by calling it with dummy input
             logger.info(f"Initializing Generator {name.upper()} layers...")
             dummy_input = tf.zeros((1, 64, 64, 1))
             _ = model(dummy_input, training=False)
             
             logger.info(f"Model has {len(model.weights)} weight tensors")
             
-            logger.info(f"Loading weights for Generator {name.upper()}...")
-            try:
-                model.load_weights(output_path)
-                logger.info(f"Generator {name.upper()} LOADED SUCCESSFULLY")
-            except Exception as load_err:
-                logger.error(f"Weight loading failed: {load_err}")
-                # Try loading by name
-                logger.info("Attempting load_weights with by_name=False, skip_mismatch=False...")
-                model.load_weights(output_path, by_name=False, skip_mismatch=False)
+            logger.info(f"Loading weights manually for Generator {name.upper()}...")
+            load_weights_manually(model, output_path)
             
             models[name] = model
+            logger.info(f"Generator {name.upper()} LOADED SUCCESSFULLY")
         
         models_loaded = True
         logger.info("ALL 4 GENERATORS LOADED - READY FOR INFERENCE")
